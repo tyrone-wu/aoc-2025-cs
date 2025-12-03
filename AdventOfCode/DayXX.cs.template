@@ -1,0 +1,25 @@
+﻿namespace AdventOfCode;
+
+public class DayXX : BaseDay
+{
+    private readonly string _input;
+
+    public DayXX()
+    {
+        _input = File.ReadAllText(InputFilePath);
+    }
+
+    public override ValueTask<string> Solve_1() => new($"{Part1()}");
+
+    private int Part1()
+    {
+        return -1;
+    }
+
+    public override ValueTask<string> Solve_2() => new($"{Part2()}");
+
+    private int Part2()
+    {
+        return -1;
+    }
+}
