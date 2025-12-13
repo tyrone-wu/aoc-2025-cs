@@ -1,3 +1,7 @@
+# 🎄 Advent of Code 2025
+
+![North Pole base](./north_pole_base.png)
+
 # AdventOfCode.Template
 
 ![CI](https://github.com/eduherminio/AdventOfCode.Template/workflows/CI/badge.svg)
