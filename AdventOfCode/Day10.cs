@@ -56,60 +56,103 @@ public class Day10 : BaseDay
             throw new Exception("no solution found");
         }
 
-        // public uint MinPressesJoltDfs()
-        // {
-        //     var cache = new Dictionary<int, uint>();
-        //     foreach (var button in _buttons)
-        //     {
-        //         var buttonJoltage = new int[_joltageReqs.Length];
-        //         foreach (var toggle in button)
-        //             buttonJoltage[toggle] += 1;
-        //         cache[HashJoltage(buttonJoltage)] = 1;
-        //     }
+        // basically this idea: https://www.reddit.com/r/adventofcode/comments/1pity70/2025_day_10_solutions/ntb36sb/
+        // since my bfs + factoring heuristic can't finish the OOM lines
+        public uint MinPressesJoltDfs()
+        {
+            Console.WriteLine("  diagram: {0}", _lightDiagram);
 
-        //     Console.WriteLine("diagram: {0}", _lightDiagram);
-        //     uint Dfs(int[] joltage)
-        //     {
-        //         if (joltage.All(jolt => jolt == 0))
-        //             return 0U;
+            uint Dfs(int[] joltage, int[] buttonIdxs)
+            {
+                if (joltage.All(jolt => jolt == 0))
+                    return 0U;
 
-        //         var encoded = HashJoltage(joltage);
-        //         if (cache.TryGetValue(encoded, out uint cachedPresses))
-        //             return cachedPresses;
+                IEnumerable<(int, int)> MinJoltTargets()
+                {
+                    var minJolt = joltage
+                        .Where(jolt => jolt != 0)
+                        .Min();
+                    return joltage
+                        .Select((jolt, i) => (jolt, i))
+                        .Where(jolt => jolt.jolt == minJolt);
+                }
 
-        //         var presses = (uint) int.MaxValue;
-        //         foreach (var button in _buttons)
-        //         {
-        //             var newJoltage = joltage.ToArray();
-        //             var invalid = false;
-        //             foreach (var toggle in button)
-        //             {
-        //                 if (newJoltage[toggle] <= 0)
-        //                 {
-        //                     invalid = true;
-        //                     break;
-        //                 }
-        //                 newJoltage[toggle] -= 1;
-        //             }
-        //             if (invalid)
-        //                 continue;
+                var minPresses = (uint) ushort.MaxValue;
+                foreach (var (minJolt, minJoltIdx) in MinJoltTargets())
+                {
+                    var matchedButtonIdxs = buttonIdxs
+                        .Where(i => _buttons[i].Contains(minJoltIdx))
+                        .ToArray();
+                    if (matchedButtonIdxs.Length == 0)
+                        continue;
 
-        //             presses = Math.Min(presses, Dfs(newJoltage) + 1);
-        //         }
+                    var prunedButtonIdxs = buttonIdxs.Where(i => !matchedButtonIdxs.Contains(i)).ToArray();
 
-        //         cache[encoded] = presses;
-        //         return presses;
-        //     }
+                    IEnumerable<int[]> GenerateFreqs()
+                    {
+                        var freqs = new int[matchedButtonIdxs.Length];
+                        freqs[^1] = minJolt;
+                        yield return freqs.ToArray();
 
-        //     var presses = Dfs(_joltageReqs);
-        //     Console.WriteLine(presses);
-        //     return presses;
-        // }
+                        while (true)
+                        {
+                            var fromIdx = freqs.Length - 1;
+                            while (fromIdx > 0 && freqs[fromIdx] == 0)
+                                fromIdx -= 1;
+                            if (fromIdx == 0)
+                                break;
+
+                            var tmp = freqs[fromIdx];
+                            freqs[fromIdx - 1] += 1;
+                            freqs[fromIdx] = 0;
+                            freqs[^1] = tmp - 1;
+
+                            yield return freqs.ToArray();
+                        }
+                    }
+
+                    foreach (var matchedButtonFreqs in GenerateFreqs())
+                    {
+                        var newJoltage = joltage.ToArray();
+                        var invalid = false;
+                        for (int i = 0; i < matchedButtonFreqs.Length; ++i)
+                        {
+                            var freq = matchedButtonFreqs[i];
+                            if (freq == 0)
+                                continue;
+
+                            var buttonIdx = matchedButtonIdxs[i];
+                            foreach (var toggle in _buttons[buttonIdx])
+                            {
+                                if (newJoltage[toggle] < freq)
+                                {
+                                    invalid = true;
+                                    break;
+                                }
+                                newJoltage[toggle] -= freq;
+                            }
+                            if (invalid)
+                                break;
+                        }
+                        if (!invalid)
+                            minPresses = Math.Min(minPresses, Dfs(newJoltage, prunedButtonIdxs) + (uint) minJolt);
+                    }
+                }
+
+                return minPresses;
+            }
+
+            var presses = Dfs(_joltageReqs, [.. Enumerable.Range(0, _buttons.Length)]);
+            Console.WriteLine("  total: {0}", presses);
+            return presses;
+        }
 
         // uses a huge ton of memory
-        // can do all lines on actual input except line 113
-        public uint MinPressesJolt()
+        // can solve some lines instantly, some a few mins, but a couple lines OOM
+        // OOM lines: 3, 55, 106, 107, 113, 161
+        public uint MinPressesJoltBfs()
         {
+            Console.WriteLine("  diagram: {0}", _lightDiagram);
             var startJoltage = _joltageReqs.ToArray();
 
             var edgeCaseIdx = _joltageReqs.IndexOf(1);
@@ -126,29 +169,33 @@ public class Day10 : BaseDay
                 }
             }
 
-            // var seen = new HashSet<int>()
-            // {
-            //     HashJoltage(startJoltage)
-            // };
-            var cache = new Dictionary<string, uint>
+            // cache number of presses to get to joltage array
+            // if remaining joltage to target is factor of something computed already
+            // key: joltage array, value: presses
+            var pressesCache = new Dictionary<(long, long), uint>
             {
-                [EncodeJoltage(new int[startJoltage.Length])] = 0U
+                [HashJoltage(new int[startJoltage.Length])] = 0U
             };
+            // cache the (presses, factor) at that point in time for remaining joltage array to reach target
+            // if we computed a factor but don't have the joltage in `pressesCache`, we instead cache the needed
+            // joltage for that factor and hope we encounter it in the future
+            // key: remaining factored joltage array, value: (presses at that time, factor at that time)
+            var factorCache =  new Dictionary<(long, long), (uint, uint)>();
 
-            Console.WriteLine("diagram: {0}", _lightDiagram);
             var queue = new Queue<(int[], uint)>([(startJoltage, 0U)]);
             while (queue.Count > 0)
             {
                 var (joltage, presses) = queue.Dequeue();
                 if (joltage.All(jolt => jolt == 0))
                 {
-                    Console.WriteLine("  idk how it managed to get here, presses: {0}", presses);
+                    Console.WriteLine("  pure brute force | presses: {0}", presses);
                     return presses;
                 }
 
                 presses += 1U;
-                foreach (var button in _buttons)
+                for (int i = _buttons.Length - 1; i >= 0; --i) // foreach (var button in _buttons)
                 {
+                    var button = _buttons[i];
                     if (edgeCaseIdx != -1 && button.Contains(edgeCaseIdx))
                         continue;
 
@@ -166,41 +213,42 @@ public class Day10 : BaseDay
                     if (invalid)
                         continue;
 
-                    // var joltageEncoded = HashJoltage(newJoltage);
-                    // if (seen.Contains(joltageEncoded))
-                    //     continue;
-                    // seen.Add(joltageEncoded);
-
-                    var joltageUsed = _joltageReqs
-                        .Select((jolt, i) => jolt - newJoltage[i])
-                        .ToArray();
-                    var encodedUsed = EncodeJoltage(joltageUsed);
-                    if (cache.ContainsKey(encodedUsed))
+                    var joltageUsed = _joltageReqs.Select((jolt, i) => jolt - newJoltage[i]);
+                    var usedJoltageHash = HashJoltage(joltageUsed);
+                    if (pressesCache.ContainsKey(usedJoltageHash))
                         continue;
                     else
-                        cache[encodedUsed] = presses;
+                        pressesCache[usedJoltageHash] = presses;
 
-                    var minRemaining = newJoltage.Min();
-                    var minFactoredPresses = uint.MaxValue;
-                    var canFactor = false;
-                    for (var factor = 2; factor <= minRemaining; ++factor)
+                    if (factorCache.TryGetValue(usedJoltageHash, out (uint, uint) factored))
+                    {
+                        var unfactoredPresses = factored.Item1 + factored.Item2 * presses;
+                        Console.WriteLine("  future factor: {0} | total: {1}", factored.Item2, unfactoredPresses);
+                        return unfactoredPresses;
+                    }
+
+                    var minRemainingJolt = newJoltage.Min();
+                    var minUnfactoredPresses = uint.MaxValue;
+                    var factorExists = false;
+                    for (var factor = 2; factor <= minRemainingJolt; ++factor)
                     {
                         if (!newJoltage.All(jolt => jolt % factor == 0))
                             continue;
 
-                        var factoredJoltage = newJoltage
-                            .Select(jolt => jolt / factor)
-                            .ToArray();
-                        var encodedFactor = EncodeJoltage(factoredJoltage);
-                        if (cache.TryGetValue(encodedFactor, out uint factoredPress))
+                        var factoredJoltage = newJoltage.Select(jolt => jolt / factor);
+                        var factorHash = HashJoltage(factoredJoltage);
+                        if (pressesCache.TryGetValue(factorHash, out uint factoredPress))
                         {
-                            Console.WriteLine("  factor: {0} | total: {1}", factor, presses + (uint) factor * factoredPress);
-                            canFactor = true;
-                            minFactoredPresses = Math.Min(minFactoredPresses, presses + (uint) factor * factoredPress);
+                            var unfactoredPresses = presses + (uint) factor * factoredPress;
+                            minUnfactoredPresses = Math.Min(minUnfactoredPresses, unfactoredPresses);
+                            factorExists = true;
+                            Console.WriteLine("  past factor: {0} | total: {1}", factor, minUnfactoredPresses);
                         }
+                        else
+                            factorCache[factorHash] = (presses, (uint) factor);
                     }
-                    if (canFactor)
-                        return minFactoredPresses;
+                    if (factorExists)
+                        return minUnfactoredPresses;
 
                     queue.Enqueue((newJoltage, presses));
                 }
@@ -208,9 +256,14 @@ public class Day10 : BaseDay
             throw new Exception("no solution found");
         }
 
-        private static int HashJoltage(IEnumerable<int> joltage)
+        // string ends up causing collision somehow
+        // largest jolt is 275 in my input
+        private static (long, long) HashJoltage(IEnumerable<int> joltage)
         {
-            return EncodeJoltage(joltage).GetHashCode();
+            var hash = new long[2];
+            foreach (var (jolt, i) in joltage.Select((jolt, i) => ((long) jolt, i)))
+                hash[i / 5] = (hash[i / 5] << 9) | jolt;
+            return (hash[0], hash[1]);
         }
 
         private static string EncodeJoltage(IEnumerable<int> joltage)
@@ -247,8 +300,23 @@ public class Day10 : BaseDay
     private uint Part2()
     {
         var presses = 0U;
-        foreach (var machine in _manual)
-            presses += machine.MinPressesJolt();
+        foreach (var (machine, i) in _manual.Select((machine, i) => (machine, i)))
+        {
+            Console.WriteLine("line {0}", i + 1);
+            presses += machine.MinPressesJoltDfs();
+        }
         return presses;
+
+        // var oomLines = new int[]{ 3, 55, 106, 107, 113, 161 };
+        // var presses = 0U;
+        // foreach (var (machine, i) in _manual.Select((machine, i) => (machine, i)))
+        // {
+        //     if (oomLines.Contains(i))
+        //         continue;
+
+        //     Console.WriteLine("line {0}", i + 1);
+        //     presses += machine.MinPressesJoltBfs();
+        // }
+        // return presses;
     }
 }
